@@ -1,0 +1,15 @@
+device: cuda:3
+epochs: 10
+eval_freq: 10
+data:
+    train_file: "/home/apd10/XMLTrain/sample/train_shuf.txt"
+    test_file: "/home/apd10/XMLTrain/sample/test_shuf.txt"
+    train_batch: 128
+    test_batch: 128
+    dimension: 512
+    label_dimension: 670091
+ 
+model:
+    rz: True
+    arch: 512-1000-670091
+    sizes: [10000, 1000000]
