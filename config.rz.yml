@@ -1,4 +1,6 @@
 device: cuda:2
+sparse: False
+lr: 0.001
 epochs: 10
 eval_freq: 1000
 data:
