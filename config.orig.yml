@@ -1,14 +1,15 @@
 device: cuda:3
-epochs: 10
-eval_freq: 1000
+lr: 0.001
+epochs: 100
+eval_freq: 50000
 data:
-    train_file: "/home/apd10/XMLTrain/sample/x.txt"
-    test_file: "/home/apd10/XMLTrain/sample/test_shuf.txt"
+    train_file: "/home/apd10/ExtremeClassificationRz/data/LF-AmazonTitles-131K/train.txt"
+    test_file: "/home/apd10/ExtremeClassificationRz/data/LF-AmazonTitles-131K/test.txt.x"
     train_batch: 128
     test_batch: 128
-    dimension: 512
-    label_dimension: 670091
+    dimension: 40000
+    label_dimension: 131073
  
 model:
     rz: False
-    arch: 512-100-670091
+    arch: 40000-100-100-131073
