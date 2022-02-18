@@ -10,6 +10,7 @@ import pdb
 import yaml
 from RzLinear import RzLinear
 from tqdm import tqdm
+import tempfile
 
 import pyximport
 pyximport.install()
@@ -82,6 +83,7 @@ class FCNRZ(nn.Module):
             self.weights.append(hashed_weight)
             self.layers.append(rzlinear)
             self.layers.append(nn.ReLU())
+
         self.layers = self.layers[:-1]
         self.model = nn.Sequential(*self.layers)
 
@@ -89,7 +91,7 @@ class FCNRZ(nn.Module):
         x = self.model(x)
         return x
 
-def eval(test_dataloader, model, test_itr, sparse, dev):
+def eval(test_dataloader, model, test_itr, sparse, dev, epoch, itr, log_handle):
     actual_labels = []
     predicted_labels = []
 
@@ -105,16 +107,20 @@ def eval(test_dataloader, model, test_itr, sparse, dev):
         actual_labels.append(np.array(y))
         yhat = model(x, w)
         predicted_labels.append(np.array(yhat.detach().cpu()))
+
     print("Metrics .. computing ..")
     A = np.concatenate(actual_labels, axis=0)
     P = np.concatenate(predicted_labels, axis=0)
     acc = xc_metrics.Metrics(true_labels=A)
     args = acc.eval(P, 5)
-    print(xc_metrics.format(*args))
+  
+    prec = str(','.join([ str(i) for i in args[0]]))
+    ndg = str(','.join([ str(i) for i in args[1]]))
+    log_handle.write("epoch," + str(epoch) + ",itr," + str(itr) + ',' + prec + ',' + ndg + '\n')
+    log_handle.flush()
 
 
-def train_epoch(train_dataloader, test_dataloader, model, optimizer, eval_freq, train_itr, test_itr, epoch, sparse, dev):
-    
+def train_epoch(train_dataloader, test_dataloader, model, optimizer, eval_freq, train_itr, test_itr, epoch, sparse, dev, log_handle):
     for j,X in tqdm(enumerate(train_dataloader), total=train_itr):
         x = X[0]
         y = X[1]
@@ -126,6 +132,7 @@ def train_epoch(train_dataloader, test_dataloader, model, optimizer, eval_freq, 
         else:
             x = x.float().to(dev)
             y = y.float().to(dev)
+        
 
         optimizer.zero_grad()
         yhat = model(x, w)
@@ -133,16 +140,24 @@ def train_epoch(train_dataloader, test_dataloader, model, optimizer, eval_freq, 
         loss.backward()
         optimizer.step()
         if (epoch * train_itr + j + 1) % eval_freq == 0:
-            print(j, float(loss.detach().cpu()))
-            eval(test_dataloader, model, test_itr, sparse, dev)
+            eval(test_dataloader, model, test_itr, sparse, dev, epoch, j, log_handle)
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()    
+    parser = argparse.ArgumentParser()
     parser.add_argument('--config', action="store", dest="config", type=str, default=None, required=True,
                         help="config to setup the training")
+    parser.add_argument('--tmpdir', action="store", dest="tmpdir", type=str, default="./runs/", help="dump dir for results")
     res = parser.parse_args()
     with open(res.config, "r") as f:
         config = yaml.load(f)
+    
+    temp_dir = tempfile.mkdtemp(dir=res.tmpdir)
+    log_file = temp_dir + "/results.txt"
+    log_handle = open(log_file, "w")
+
+    config_name = res.config.split('/')[-1]
+    with open(temp_dir + "/" + config_name, "w") as f:
+        yaml.dump(config, f)
 
     test_dataset = GenSVMFormatParser(config['data']['test_file'], config["data"], config["sparse"])
     train_dataset = GenSVMFormatParser(config['data']['train_file'], config["data"], config["sparse"])
@@ -171,6 +186,8 @@ if __name__ == '__main__':
         model = model.float().to(dev)
 
     for epoch in range(config["epochs"]):
-        train_epoch(train_dataloader, test_dataloader, model, optimizer,  config["eval_freq"], train_itr, test_itr, epoch, config["sparse"], dev)
+        train_epoch(train_dataloader, test_dataloader, model, optimizer,  config["eval_freq"], train_itr, test_itr, epoch, config["sparse"], dev, log_handle)
+        eval(test_dataloader, model, test_itr, config["sparse"], dev, epoch, 0, log_handle)
 
-    eval(test_dataloader, model, test_itr, config["sparse"], dev)
+    eval(test_dataloader, model, test_itr, config["sparse"], dev, epochs, 0, log_handle)
+    log_handle.close()
