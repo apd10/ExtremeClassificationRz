@@ -1,0 +1,17 @@
+device: cuda:0
+sparse: True
+lr: 0.001
+epochs: 100
+eval_freq: 5000
+data:
+    train_file: "/home/apd10/ExtremeClassificationRz/data/LF-AmazonTitles-131K/train.txt"
+    test_file: "/home/apd10/ExtremeClassificationRz/data/LF-AmazonTitles-131K/test.txt"
+    train_batch: 128
+    test_batch: 128
+    dimension: 40000
+    label_dimension: 131073
+ 
+model:
+    rz: True
+    arch: 40000-5000-5000-1000-131073
+    sizes: [200000-25000-25000-650000]
