@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 import pdb
 import yaml
 from RzLinear import RzLinear
+from hashedEmbeddingBag import HashedEmbeddingBag
 from tqdm import tqdm
 import tempfile
 
@@ -65,7 +66,6 @@ class FCN(nn.Module):
         if self.dense:
             x = self.model(x)
         else:
-            torch.sum(self.embedding(x) * w.unsqueeze(2), axis=2)
             emb = torch.sum(self.embedding(x) * w.unsqueeze(2), axis=1).squeeze()
             x = self.model(emb)
         return x
@@ -77,18 +77,39 @@ class FCNRZ(nn.Module):
         self.layers = []
         self.weights = []
         lens = [int(i) for i in arch.split('-')]
-        for i in range(len(lens) -1):
-            hashed_weight = nn.Parameter(torch.from_numpy(np.random.uniform(-1/np.sqrt(lens[i+1]), 1/np.sqrt(lens[i+1]), size=sizes[i]).astype(np.float32)))
-            rzlinear = RzLinear(lens[i], lens[i+1], 1, hashed_weight, tiled=True)
-            self.weights.append(hashed_weight)
-            self.layers.append(rzlinear)
-            self.layers.append(nn.ReLU())
+        self.dense = not sparse
+        self.sparse = sparse
 
-        self.layers = self.layers[:-1]
-        self.model = nn.Sequential(*self.layers)
+        if sparse:
+            hashed_weight = nn.Parameter(torch.from_numpy(np.random.uniform(-1/np.sqrt(lens[0]), 1/np.sqrt(lens[0]), size=sizes[0]).astype(np.float32)))
+            self.embedding = HashedEmbeddingBag(lens[0], lens[1], _weight=hashed_weight, val_offset=0, uma_chunk_size=32, no_bag=True, sparse=False, padding_idx=0)
+            self.weights.append(hashed_weight)
+
+            for i in range(len(lens) -2):
+                hashed_weight = nn.Parameter(torch.from_numpy(np.random.uniform(-1/np.sqrt(lens[i]), 1/np.sqrt(lens[i]), size=sizes[i]).astype(np.float32)))
+                rzlinear = RzLinear(lens[i+1], lens[i+2], 1, hashed_weight, tiled=True)
+                self.weights.append(hashed_weight)
+                self.layers.append(rzlinear)
+                self.layers.append(nn.ReLU())
+                self.layers = self.layers[:-1]
+                self.model = nn.Sequential(*self.layers)
+            
+        else:
+            for i in range(len(lens) -1):
+                hashed_weight = nn.Parameter(torch.from_numpy(np.random.uniform(-1/np.sqrt(lens[i]), 1/np.sqrt(lens[i]), size=sizes[i]).astype(np.float32)))
+                rzlinear = RzLinear(lens[i], lens[i+1], 1, hashed_weight, tiled=True)
+                self.weights.append(hashed_weight)
+                self.layers.append(rzlinear)
+                self.layers.append(nn.ReLU())
+                self.layers = self.layers[:-1]
+                self.model = nn.Sequential(*self.layers)
 
     def forward(self, x, w = None):
-        x = self.model(x)
+        if self.dense:
+            x = self.model(x)
+        else:
+            emb = torch.sum(self.embedding(x) * w.unsqueeze(2), axis=1).squeeze()
+            x = self.model(emb)
         return x
 
 def eval(test_dataloader, model, test_itr, sparse, dev, epoch, itr, log_handle):
