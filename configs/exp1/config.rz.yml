@@ -13,5 +13,5 @@ data:
  
 model:
     rz: True
-    arch: 40000-ARCH-131073
-    sizes: [SIZE]
+    arch: 40000-500-131073
+    sizes: [40000000,131000000]
