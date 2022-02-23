@@ -112,9 +112,19 @@ class FCNRZ(nn.Module):
             x = self.model(emb)
         return x
 
+
+def prec_compute(A, P, k):
+    idx = np.argpartition(-P, axis=1, kth=k)[:,:k]
+    values = [np.sum(A[i][idx[i]])/k for i in range(idx.shape[0])]
+    return values
+    
+    
 def eval(test_dataloader, model, test_itr, sparse, dev, epoch, itr, log_handle):
-    actual_labels = []
-    predicted_labels = []
+    #actual_labels = []
+    #predicted_labels = []
+    p1values = []
+    p3values = []
+    p5values = []
 
     for j,X in tqdm(enumerate(test_dataloader), total=test_itr):
         x = X[0]
@@ -125,23 +135,30 @@ def eval(test_dataloader, model, test_itr, sparse, dev, epoch, itr, log_handle):
             x = x.long().to(dev)
         else:
             x = x.float().to(dev)
-        actual_labels.append(np.array(y))
+        y = np.array(y)
+        #actual_labels.append(y)
         yhat = model(x, w)
-        predicted_labels.append(np.array(yhat.detach().cpu()))
+        yhat = np.array(yhat.detach().cpu())
+        #predicted_labels.append(yhat)
+        p1values = p1values + prec_compute(y, yhat, 1)
+        p3values = p3values + prec_compute(y, yhat, 3)
+        p5values = p5values + prec_compute(y, yhat, 5)
 
     print("Metrics .. computing ..")
-    A = np.concatenate(actual_labels, axis=0)
-    P = np.concatenate(predicted_labels, axis=0)
-    acc = xc_metrics.Metrics(true_labels=A)
-    args = acc.eval(P, 5)
-  
-    prec = str(','.join([ str(i) for i in args[0]]))
-    ndg = str(','.join([ str(i) for i in args[1]]))
-    log_handle.write("epoch," + str(epoch) + ",itr," + str(itr) + ',' + prec + ',' + ndg + '\n')
+    #A = np.concatenate(actual_labels, axis=0)
+    #P = np.concatenate(predicted_labels, axis=0)
+    #acc = xc_metrics.Metrics(true_labels=A)
+    #args = acc.eval(P, 5)
+    #prec = str(','.join([ str(i) for i in args[0]]))
+    #ndg = str(','.join([ str(i) for i in args[1]]))
+    #log_handle.write("epoch," + str(epoch) + ",itr," + str(itr) + ',' + prec + ',' + ndg + '\n')
+
+    prec = str(','.join([str(i) for i in [np.mean(p1values), np.mean(p3values), np.mean(p5values)]]))
+    log_handle.write("epoch," + str(epoch) + ",itr," + str(itr) + ',' + prec + '\n')
     log_handle.flush()
 
 
-def train_epoch(train_dataloader, test_dataloader, model, optimizer, eval_freq, train_itr, test_itr, epoch, sparse, dev, log_handle):
+def train_epoch(train_dataloader, test_dataloader, model, optimizer, eval_itr, train_itr, test_itr, epoch, sparse, dev, log_handle):
     for j,X in tqdm(enumerate(train_dataloader), total=train_itr):
         x = X[0]
         y = X[1]
@@ -160,7 +177,7 @@ def train_epoch(train_dataloader, test_dataloader, model, optimizer, eval_freq, 
         loss = F.binary_cross_entropy_with_logits(yhat, y,  reduction = 'mean')
         loss.backward()
         optimizer.step()
-        if (epoch * train_itr + j + 1) % eval_freq == 0:
+        if (epoch * train_itr + j + 1) % eval_itr == 0:
             eval(test_dataloader, model, test_itr, sparse, dev, epoch, j, log_handle)
 
 if __name__ == '__main__':
@@ -207,8 +224,9 @@ if __name__ == '__main__':
         model = model.float().to(dev)
 
     for epoch in range(config["epochs"]):
-        train_epoch(train_dataloader, test_dataloader, model, optimizer,  config["eval_freq"], train_itr, test_itr, epoch, config["sparse"], dev, log_handle)
-        eval(test_dataloader, model, test_itr, config["sparse"], dev, epoch, 0, log_handle)
+        train_epoch(train_dataloader, test_dataloader, model, optimizer,  config["eval_itr"], train_itr, test_itr, epoch, config["sparse"], dev, log_handle)
+        if (epoch  + 1) % config["eval_epoch"] ==0:
+            eval(test_dataloader, model, test_itr, config["sparse"], dev, epoch, 0, log_handle)
 
     eval(test_dataloader, model, test_itr, config["sparse"], dev, epochs, 0, log_handle)
     log_handle.close()
