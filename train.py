@@ -12,11 +12,15 @@ from RzLinear import RzLinear
 from hashedEmbeddingBag import HashedEmbeddingBag
 from tqdm import tqdm
 import tempfile
+import sys
 
 import pyximport
 pyximport.install()
 
 import xclib.evaluation.xc_metrics as xc_metrics
+
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters())
 
 def sparse_collate_function(pointlist, pad_token=0):
     labels = []
@@ -72,7 +76,7 @@ class FCN(nn.Module):
         
 
 class FCNRZ(nn.Module):
-    def __init__(self, arch, sizes, sparse):
+    def __init__(self, arch, sizes, sparse, use_single):
         super(FCNRZ, self).__init__()
         self.layers = []
         self.weights = []
@@ -80,15 +84,26 @@ class FCNRZ(nn.Module):
         self.dense = not sparse
         self.sparse = sparse
 
-        if sparse:
-            hashed_weight = nn.Parameter(torch.from_numpy(np.random.uniform(-1/np.sqrt(lens[0]), 1/np.sqrt(lens[0]), size=sizes[0]).astype(np.float32)))
-            self.embedding = HashedEmbeddingBag(lens[0], lens[1], _weight=hashed_weight, val_offset=0, uma_chunk_size=32, no_bag=True, sparse=False, padding_idx=0)
+        if use_single:
+            max_len = np.max(lens)
+            hashed_weight = nn.Parameter(torch.from_numpy(np.random.uniform(-1/np.sqrt(max_len), 1/np.sqrt(max_len), size=sizes[0]).astype(np.float32)))
             self.weights.append(hashed_weight)
 
-            for i in range(len(lens) -2):
-                hashed_weight = nn.Parameter(torch.from_numpy(np.random.uniform(-1/np.sqrt(lens[i]), 1/np.sqrt(lens[i]), size=sizes[i]).astype(np.float32)))
-                rzlinear = RzLinear(lens[i+1], lens[i+2], 1, hashed_weight, tiled=True)
+        if sparse:
+            if not use_single :
+                hashed_weight = nn.Parameter(torch.from_numpy(np.random.uniform(-1/np.sqrt(lens[0]), 1/np.sqrt(lens[0]), size=sizes[0]).astype(np.float32)))
                 self.weights.append(hashed_weight)
+            else:
+                hashed_weight = self.weights[0]
+            self.embedding = HashedEmbeddingBag(lens[0], lens[1], _weight=hashed_weight, val_offset=0, uma_chunk_size=32, no_bag=True, sparse=False, padding_idx=0)
+
+            for i in range(len(lens) -2):
+                if not use_single:
+                    hashed_weight = nn.Parameter(torch.from_numpy(np.random.uniform(-1/np.sqrt(lens[i+1]), 1/np.sqrt(lens[i+1]), size=sizes[i+1]).astype(np.float32)))
+                    self.weights.append(hashed_weight)
+                else:
+                    hashed_weight = self.weights[0]
+                rzlinear = RzLinear(lens[i+1], lens[i+2], 1, hashed_weight, tiled=True)
                 self.layers.append(rzlinear)
                 self.layers.append(nn.ReLU())
                 self.layers = self.layers[:-1]
@@ -119,7 +134,7 @@ def prec_compute(A, P, k):
     return values
     
     
-def eval(test_dataloader, model, test_itr, sparse, dev, epoch, itr, log_handle):
+def eval(test_dataloader, model, test_itr, sparse, dev, epoch, itr, res_handle):
     #actual_labels = []
     #predicted_labels = []
     p1values = []
@@ -151,14 +166,14 @@ def eval(test_dataloader, model, test_itr, sparse, dev, epoch, itr, log_handle):
     #args = acc.eval(P, 5)
     #prec = str(','.join([ str(i) for i in args[0]]))
     #ndg = str(','.join([ str(i) for i in args[1]]))
-    #log_handle.write("epoch," + str(epoch) + ",itr," + str(itr) + ',' + prec + ',' + ndg + '\n')
+    #res_handle.write("epoch," + str(epoch) + ",itr," + str(itr) + ',' + prec + ',' + ndg + '\n')
 
     prec = str(','.join([str(i) for i in [np.mean(p1values), np.mean(p3values), np.mean(p5values)]]))
-    log_handle.write("epoch," + str(epoch) + ",itr," + str(itr) + ',' + prec + '\n')
-    log_handle.flush()
+    res_handle.write("epoch," + str(epoch) + ",itr," + str(itr) + ',' + prec + '\n')
+    res_handle.flush()
 
 
-def train_epoch(train_dataloader, test_dataloader, model, optimizer, eval_itr, train_itr, test_itr, epoch, sparse, dev, log_handle):
+def train_epoch(train_dataloader, test_dataloader, model, optimizer, eval_itr, train_itr, test_itr, epoch, sparse, dev, res_handle):
     for j,X in tqdm(enumerate(train_dataloader), total=train_itr):
         x = X[0]
         y = X[1]
@@ -178,20 +193,26 @@ def train_epoch(train_dataloader, test_dataloader, model, optimizer, eval_itr, t
         loss.backward()
         optimizer.step()
         if (epoch * train_itr + j + 1) % eval_itr == 0:
-            eval(test_dataloader, model, test_itr, sparse, dev, epoch, j, log_handle)
+            eval(test_dataloader, model, test_itr, sparse, dev, epoch, j, res_handle)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', action="store", dest="config", type=str, default=None, required=True,
                         help="config to setup the training")
     parser.add_argument('--tmpdir', action="store", dest="tmpdir", type=str, default="./runs/", help="dump dir for results")
+    parser.add_argument('--test', action="store_true", default=False)
     res = parser.parse_args()
     with open(res.config, "r") as f:
         config = yaml.load(f)
     
     temp_dir = tempfile.mkdtemp(dir=res.tmpdir)
-    log_file = temp_dir + "/results.txt"
+    res_file = temp_dir + "/results.txt"
+    log_file = temp_dir + "/out.log"
+    res_handle = open(res_file, "w")
     log_handle = open(log_file, "w")
+    if not res.test:
+        sys.stdout = log_handle
+    
 
     config_name = res.config.split('/')[-1]
     with open(temp_dir + "/" + config_name, "w") as f:
@@ -213,10 +234,11 @@ if __name__ == '__main__':
     test_dataloader = DataLoader(test_dataset, batch_size=config['data']['train_batch'], shuffle=True, collate_fn = collate_fn)
     
     if config['model']['rz']:
-        model = FCNRZ(config['model']['arch'], config['model']['sizes'], config["sparse"])
+        model = FCNRZ(config['model']['arch'], config['model']['sizes'], config["sparse"], config["model"]["use_single"])
     else:
         model = FCN(config['model']['arch'], config["sparse"])
     print(model)
+    print("total parameters", count_parameters(model), flush=True)
     optimizer = torch.optim.Adam(model.parameters(), lr = config["lr"])
     dev = config["device"]
 
@@ -224,9 +246,10 @@ if __name__ == '__main__':
         model = model.float().to(dev)
 
     for epoch in range(config["epochs"]):
-        train_epoch(train_dataloader, test_dataloader, model, optimizer,  config["eval_itr"], train_itr, test_itr, epoch, config["sparse"], dev, log_handle)
+        train_epoch(train_dataloader, test_dataloader, model, optimizer,  config["eval_itr"], train_itr, test_itr, epoch, config["sparse"], dev, res_handle)
         if (epoch  + 1) % config["eval_epoch"] ==0:
-            eval(test_dataloader, model, test_itr, config["sparse"], dev, epoch, 0, log_handle)
+            eval(test_dataloader, model, test_itr, config["sparse"], dev, epoch, 0, res_handle)
 
-    eval(test_dataloader, model, test_itr, config["sparse"], dev, epochs, 0, log_handle)
+    eval(test_dataloader, model, test_itr, config["sparse"], dev, epochs, 0, res_handle)
+    res_handle.close()
     log_handle.close()
